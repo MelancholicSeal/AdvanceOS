@@ -76,7 +76,7 @@ int main(int argc, char *argv[]) {
 
             // Log to file
             out = fopen(name, "a");
-            fprintf(out, "pid %d from ppid %d, worker %d completed task %d\n", getpid(), getppid(), id, wait);
+            fprintf(out, "pid %d from ppid %d, parent calls me %d", getpid(), getppid(), id);
             fclose(out);
 
             // Send back completion signal
