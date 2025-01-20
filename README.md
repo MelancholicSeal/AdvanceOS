@@ -7,5 +7,4 @@ This program simulates a worker pool system in which multiple worker processes h
 To compile and run the program, follow these steps:
 
 1. **Compile the program:**
-```bash
-  make
+```bash make
