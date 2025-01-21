@@ -1,17 +1,73 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <semaphore.h>
+#include <sys/types.h>
 #include <sys/select.h>
+#include <sys/wait.h>
 
 #define max(x, y) ((x) > (y) ? (x) : (y))
 
+int N;
+int tmp = 0;
+int* pid;
+int** fd;
+int** cfd;
 struct msg {
     int id;
     int val;
 };
+void kill_child(int sig){
+    printf("\nCaught signal %d (SIGINT). Exiting gracefully...\n", sig);
+    
+    for(int i=1; i<=N; i++){
+        if(kill(pid[i],SIGINT)==-1){
+            printf("%d\n", pid[i]);
+        }
+    }
+    for(int i=1; i<=N; i++){
+       
+        waitpid(pid[i], NULL,0);
+    }
+
+    // close pipes
+    for (int i = 1; i <= N; i++) {
+        close(fd[i][1]);
+        close(cfd[i][0]);
+    }
+    // Free the allocated memory before exiting the program
+    for (int i = 0; i <= N; i++) {
+        free(fd[i]);  // Free each row
+    }
+    free(fd);
+    for (int i = 0; i <= N; i++) {
+        free(cfd[i]);  // Free each row
+    }    
+    free(cfd);
+    free(pid);
+    exit(0);
+}
+void ter_child(int sig){
+    printf("\nCaught signal %d (SIGINT). Exiting gracefully...\n", sig);
+    // close pipes
+    close(fd[tmp][0]);
+    close(cfd[tmp][1]);
+
+    // Free the allocated memory before exiting the program
+    for (int i = 0; i <= N; i++) {
+        free(fd[i]); 
+    }
+    free(fd);
+    for (int i = 0; i <= N; i++) {
+        free(cfd[i]);  
+    }
+    free(cfd);
+    free(pid);
+    exit(0);
+}
 
 
 int main(int argc, char *argv[]) {
@@ -22,24 +78,30 @@ int main(int argc, char *argv[]) {
     }
 
     char *name = argv[1];
-    int N = strtol(argv[2], NULL, 10);
+    N = strtol(argv[2], NULL, 10);
 
+    pid = malloc((N+1)*sizeof(int));    
     int a = 1;
-    int tmp = 0;
+    
 
     // Initialize pipes
-    int fd[N + 1][2];
-    int cfd[N +1][2];
+    fd = (int **)malloc((N + 1) * sizeof(int *));
+    cfd = (int **)malloc((N + 1) * sizeof(int *));
+    for (int i = 1; i <= N; i++) {
+        fd[i] = (int *)malloc(2 * sizeof(int));
+        cfd[i] = (int *)malloc(2 * sizeof(int));
+    }
     for (int i = 1; i <= N; i++) {
         if (pipe(fd[i]) < 0) return 1;
         if(pipe(cfd[i]) < 0) return 1;
     }
 
     FILE *out;
-    for (int i = 0; i < N; i++) {
+    for (int i = 1; i <=N; i++) {
         if (a > 0) {
             tmp++;
             a = fork();
+            pid[i]=a;
         }
     }
 
@@ -49,6 +111,7 @@ int main(int argc, char *argv[]) {
             close(fd[i][0]);
             close(cfd[i][1]);
         }
+        signal(SIGINT, kill_child);
     }
     // close unnecessary pipes for child
     else {
@@ -58,12 +121,14 @@ int main(int argc, char *argv[]) {
             if (tmp != i) close(fd[i][0]);
             if(tmp!=i) close(fd[i][1]);
         }
+        signal(SIGINT, ter_child);
     }
 
     // child logic
     if (a == 0) {
         while (1) {
             struct msg mes;
+            
             ssize_t read_bytes = read(fd[tmp][0], &mes, sizeof(mes));  // read task from parent
             if (read_bytes <= 0) {
                 printf("Worker %d: Failed to read from pipe\n", tmp);
@@ -76,7 +141,7 @@ int main(int argc, char *argv[]) {
 
             // Log to file
             out = fopen(name, "a");
-            fprintf(out, "pid %d from ppid %d, parent calls me %d", getpid(), getppid(), id);
+            fprintf(out, "pid %d from ppid %d, parent calls me %d\n", getpid(), getppid(), id);
             fclose(out);
 
             // Send back completion signal
@@ -86,9 +151,7 @@ int main(int argc, char *argv[]) {
                 printf("Worker %d: Failed to write to pipe\n", tmp);
             }
         }
-        // close pipes
-        close(fd[tmp][0]);
-        close(fd[tmp][1]);
+        
 
     } else {
         // parent logic
@@ -161,15 +224,7 @@ int main(int argc, char *argv[]) {
                     }
                 }
             }
-        }
-
-        // close pipes
-        for (int i = 1; i <= N; i++) {
-            close(fd[i][1]);
-            close(cfd[i][0]);
-        }
-       
+        }  
     }
-
     return 0;
 }
