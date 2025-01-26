@@ -43,6 +43,20 @@ make
 - A log of each worker's activity is written to the specified output file. The log includes:
 - The process ID of the parent and the worker.
 
+### 6. Graceful Shutdown
+
+The program handles graceful shutdown by catching **SIGINT** (interrupt) signals, typically sent when the user presses **Ctrl+C**.
+
+#### In the Parent Process:
+- The program uses the `sigaction` system call to register a signal handler for **SIGINT**. When the signal is caught, the `kill_child()` function is executed.
+- The `kill_child()` function sends the **SIGINT** signal to all child processes to terminate them gracefully. Then, it waits for each child process to exit using `waitpid()`.
+- After ensuring all workers have exited, the program closes any open pipes and frees dynamically allocated memory to prevent memory leaks.
+
+#### In the Worker Processes:
+- Each worker also sets up a signal handler for **SIGINT** using `sigaction`. When the signal is received, the worker enters the `term_child()` function, which:
+    - Closes its pipes.
+    - Frees dynamically allocated memory before exiting.
+
 ## Notes
 - The program uses `fork()` to create worker processes and pipes to facilitate communication between them.
 - `select()` is used to handle multiple file descriptors efficiently without blocking.
