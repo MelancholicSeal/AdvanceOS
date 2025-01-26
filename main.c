@@ -1,17 +1,73 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <semaphore.h>
+#include <sys/types.h>
 #include <sys/select.h>
+#include <sys/wait.h>
 
-#define max(x, y) ((x) > (y) ? (x) : (y))
 
+int N;
+int tmp = 0;
+int* pid;
+int** fd;
+int** cfd;
 struct msg {
     int id;
     int val;
 };
+
+void kill_child(int sig){
+    printf("\nCaught signal %d (SIGINT). Exiting gracefully...\n", sig);
+    
+    for(int i=1; i<=N; i++){
+        if(kill(pid[i],SIGINT)==-1){
+            printf("%d\n", pid[i]);
+        }
+    }
+    for(int i=1; i<=N; i++){
+       
+        waitpid(pid[i], NULL,0);
+    }
+
+    // close pipes
+    for (int i = 1; i <= N; i++) {
+        close(fd[i][1]);
+        close(cfd[i][0]);
+    }
+    // Free the allocated memory before exiting the program
+    for (int i = 0; i <= N; i++) {
+        free(fd[i]);  // Free each row
+    }
+    free(fd);
+    for (int i = 0; i <= N; i++) {
+        free(cfd[i]);  // Free each row
+    }    
+    free(cfd);
+    free(pid);
+    exit(0);
+}
+void term_child(int sig){
+    printf("\nCaught signal %d (SIGINT). Exiting gracefully...\n", sig);
+    // close pipes
+    close(fd[tmp][0]);
+    close(cfd[tmp][1]);
+
+    // Free the allocated memory before exiting the program
+    for (int i = 0; i <= N; i++) {
+        free(fd[i]); 
+    }
+    free(fd);
+    for (int i = 0; i <= N; i++) {
+        free(cfd[i]);  
+    }
+    free(cfd);
+    free(pid);
+    exit(0);
+}
 
 
 int main(int argc, char *argv[]) {
@@ -20,26 +76,31 @@ int main(int argc, char *argv[]) {
         printf("The program takes 2 arguments\n1st The name of the output file\n2nd The number of workers in the worker pool (positive integer)\n");
         return 2;
     }
-
     char *name = argv[1];
-    int N = strtol(argv[2], NULL, 10);
+    N = strtol(argv[2], NULL, 10);
 
+    pid = malloc((N+1)*sizeof(int));    
     int a = 1;
-    int tmp = 0;
+    
 
     // Initialize pipes
-    int fd[N + 1][2];
-    int cfd[N +1][2];
+    fd = (int **)malloc((N + 1) * sizeof(int *));//father writes
+    cfd = (int **)malloc((N + 1) * sizeof(int *));//child writes
+    for (int i = 1; i <= N; i++) {
+        fd[i] = (int *)malloc(2 * sizeof(int));
+        cfd[i] = (int *)malloc(2 * sizeof(int));
+    }
     for (int i = 1; i <= N; i++) {
         if (pipe(fd[i]) < 0) return 1;
         if(pipe(cfd[i]) < 0) return 1;
     }
 
     FILE *out;
-    for (int i = 0; i < N; i++) {
+    for (int i = 1; i <=N; i++) {
         if (a > 0) {
             tmp++;
             a = fork();
+            pid[i]=a;
         }
     }
 
@@ -49,6 +110,13 @@ int main(int argc, char *argv[]) {
             close(fd[i][0]);
             close(cfd[i][1]);
         }
+        //signal(SIGINT, kill_child);
+
+        struct sigaction sa;
+        sa.sa_handler = kill_child; 
+        sa.sa_flags = 0; 
+        sigemptyset(&sa.sa_mask);
+        sigaction(SIGINT, &sa, NULL);
     }
     // close unnecessary pipes for child
     else {
@@ -58,6 +126,12 @@ int main(int argc, char *argv[]) {
             if (tmp != i) close(fd[i][0]);
             if(tmp!=i) close(fd[i][1]);
         }
+
+        struct sigaction sa;
+        sa.sa_handler = term_child;  
+        sa.sa_flags = 0; 
+        sigemptyset(&sa.sa_mask);
+        sigaction(SIGINT, &sa, NULL);
     }
 
     // child logic
@@ -86,12 +160,12 @@ int main(int argc, char *argv[]) {
                 printf("Worker %d: Failed to write to pipe\n", tmp);
             }
         }
-        // close pipes
-        close(fd[tmp][0]);
-        close(fd[tmp][1]);
+        
 
-    } else {
-        // parent logic
+    }
+    // parent logic 
+    else {
+       
         out = fopen(name, "w");
         fprintf(out, "pid %d from ppid %d\n", getpid(), getppid());
         fclose(out);
@@ -102,36 +176,20 @@ int main(int argc, char *argv[]) {
         }
 
         while (1) {
-            fd_set writefds;
-            FD_ZERO(&writefds);
-
-            // Check which workers are available
+            
+            // assign task to the first available worker
             for (int i = 1; i <= N; i++) {
-                if (av[i]) FD_SET(fd[i][1], &writefds);
-            }
-
-            struct timeval tv2 = {0, 5000};  // timeout for select
-            int r = select(FD_SETSIZE + 1, NULL, &writefds, NULL, &tv2);
-
-            if (r == -1) {
-                return 3;
-            }
-
-            if (r > 0) {
-                // assign task to the first available worker
-                for (int i = 1; i <= N; i++) {
-                    if (FD_ISSET(fd[i][1], &writefds)) {
-                        struct msg mes = {i, rand() % 5 + 1};  // generate task with random wait time
-                        ssize_t write_bytes = write(fd[i][1], &mes, sizeof(mes));
-                        if (write_bytes <= 0) {
-                            printf("Parent: Failed to write to worker %d\n", i);
-                        }
-                        av[i] = 0;  // mark worker as busy
-                        break;
+                if (av[i]) {
+                    struct msg mes = {i, rand() % 5 + 1};  // generate task with random wait time
+                    ssize_t write_bytes = write(fd[i][1], &mes, sizeof(mes));
+                    if (write_bytes <= 0) {
+                        printf("Parent: Failed to write to worker %d\n", i);
                     }
+                    av[i] = 0;  // mark worker as busy
+                    break;
                 }
             }
-
+            
             // Check for completion messages from workers
             fd_set rfds;
             FD_ZERO(&rfds);
@@ -161,15 +219,7 @@ int main(int argc, char *argv[]) {
                     }
                 }
             }
-        }
-
-        // close pipes
-        for (int i = 1; i <= N; i++) {
-            close(fd[i][1]);
-            close(cfd[i][0]);
-        }
-       
+        }  
     }
-
     return 0;
 }
