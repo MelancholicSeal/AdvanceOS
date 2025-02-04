@@ -28,6 +28,9 @@ make -f Makefile.add
   - It hasn't been tested yet
   - You should create your own docker file that runs the add_client to test
 
+--Note--
+- To test parallelism you should run many clients
+
 
 ## How It Works
 
