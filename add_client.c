@@ -46,6 +46,6 @@ main (int argc, char *argv[])
 	numbers sent;
 	sent.a=strtol(argv[2], NULL, 10);
 	sent.b=strtol(argv[3], NULL, 10);
-	printf("%d",add_prog_1 (host, sent));
+	printf("%d\n",add_prog_1 (host, sent));
 exit (0);
 }
